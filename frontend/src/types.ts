@@ -27,6 +27,7 @@ export interface TextItem {
   id: string;
   text: string;
   color: string;
+  fontFamily: string;
   fontSize: number;
   x: number; // persen 0-100
   y: number; // persen 0-100

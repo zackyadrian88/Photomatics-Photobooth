@@ -75,6 +75,7 @@ function App() {
           photos={capturedPhotos}
           layout={selectedLayout}
           initialFrame={selectedFrame}
+          sessionMode={sessionMode}
           onBack={() => navigateTo('photobooth')}
           onSave={(dataUrl) => {
             setCompiledDataUrl(dataUrl);

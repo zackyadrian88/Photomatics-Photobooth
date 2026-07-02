@@ -1,17 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { CapturedPhoto, PhotostripLayout, PhotoFrame, PhotoFilter, Sticker, TextItem, PlacedSticker, FILTERS, STICKERS, FRAMES } from '../types';
-import { ChevronLeft, Download, Type, Image as ImageIcon, Smile, Palette, Trash2 } from 'lucide-react';
+import { ChevronLeft, Download, Type, Image as ImageIcon, Smile, Palette, Trash2, Crown } from 'lucide-react';
 
 interface Props {
   photos: CapturedPhoto[];
   layout: PhotostripLayout;
   initialFrame: PhotoFrame;
+  sessionMode: 'trial' | 'premium';
   onBack: () => void;
   onSave: (compiledDataUrl: string) => void;
 }
 
-const PhotoEditor: React.FC<Props> = ({ photos, layout, initialFrame, onBack, onSave }) => {
-  const [activeTab, setActiveTab] = useState<'filter' | 'sticker' | 'text' | 'frame'>('filter');
+const PhotoEditor: React.FC<Props> = ({ photos, layout, initialFrame, sessionMode, onBack, onSave }) => {
+  const [activeTab, setActiveTab] = useState<'filter' | 'sticker' | 'text' | 'frame' | 'custom'>('filter');
+  const [customImage, setCustomImage] = useState<string | null>(null);
   
   // Editor State
   const [selectedFilter, setSelectedFilter] = useState<PhotoFilter>(FILTERS[0]);
@@ -25,6 +27,48 @@ const PhotoEditor: React.FC<Props> = ({ photos, layout, initialFrame, onBack, on
   // Compiler state
   const [isCompiling, setIsCompiling] = useState(false);
   
+  // Drag state
+  const [draggingItem, setDraggingItem] = useState<{ id: string, type: 'sticker' | 'text' } | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handlePointerDown = (e: React.PointerEvent, id: string, type: 'sticker' | 'text') => {
+    e.preventDefault();
+    setDraggingItem({ id, type });
+  };
+
+  useEffect(() => {
+    const handlePointerMove = (e: PointerEvent) => {
+      if (!draggingItem || !containerRef.current) return;
+      
+      const rect = containerRef.current.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * 100;
+      const y = ((e.clientY - rect.top) / rect.height) * 100;
+
+      const clampedX = Math.max(0, Math.min(100, x));
+      const clampedY = Math.max(0, Math.min(100, y));
+
+      if (draggingItem.type === 'sticker') {
+        setPlacedStickers(prev => prev.map(s => s.id === draggingItem.id ? { ...s, x: clampedX, y: clampedY } : s));
+      } else if (draggingItem.type === 'text') {
+        setTexts(prev => prev.map(t => t.id === draggingItem.id ? { ...t, x: clampedX, y: clampedY } : t));
+      }
+    };
+
+    const handlePointerUp = () => {
+      setDraggingItem(null);
+    };
+
+    if (draggingItem) {
+      window.addEventListener('pointermove', handlePointerMove);
+      window.addEventListener('pointerup', handlePointerUp);
+    }
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [draggingItem]);
+
   // Editor Live Preview (using DOM for live preview, Canvas only for final compile)
   
   const handleAddSticker = (sticker: Sticker) => {
@@ -44,6 +88,7 @@ const PhotoEditor: React.FC<Props> = ({ photos, layout, initialFrame, onBack, on
       id: Math.random().toString(36).substring(7),
       text: inputText,
       color: '#FFFFFF',
+      fontFamily: 'Outfit',
       fontSize: 24,
       x: 50,
       y: 90
@@ -217,7 +262,7 @@ const PhotoEditor: React.FC<Props> = ({ photos, layout, initialFrame, onBack, on
         const px = (t.x / 100) * CANVAS_WIDTH;
         const py = (t.y / 100) * CANVAS_HEIGHT;
         
-        ctx.font = `bold ${t.fontSize * 1.5}px Outfit, sans-serif`; // upscale for high-res
+        ctx.font = `bold ${t.fontSize * 1.5}px ${t.fontFamily}, sans-serif`; // upscale for high-res
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = t.color;
@@ -229,11 +274,21 @@ const PhotoEditor: React.FC<Props> = ({ photos, layout, initialFrame, onBack, on
           ctx.shadowOffsetY = 2;
         }
         
-        ctx.fillText(t.text.toUpperCase(), px, py);
+        ctx.fillText(t.text, px, py);
         ctx.restore();
       });
 
-      // 6. Watermark Footer
+      // 6. Custom Image (Mascot)
+      if (customImage) {
+        const customImgEl = await loadImage(customImage);
+        ctx.save();
+        const size = 120; // Size of the overlay image
+        // Place bottom left
+        ctx.drawImage(customImgEl, 24, CANVAS_HEIGHT - size - 24, size, size);
+        ctx.restore();
+      }
+
+      // 7. Watermark Footer
       ctx.save();
       ctx.fillStyle = selectedFrame.textColor;
       ctx.font = 'bold 16px Outfit, sans-serif';
@@ -282,7 +337,8 @@ const PhotoEditor: React.FC<Props> = ({ photos, layout, initialFrame, onBack, on
         {/* Kiri: Live DOM Preview (6 col) */}
         <div className="lg:col-span-6 flex justify-center bg-black/20 rounded-3xl p-8 border border-white/5 overflow-y-auto max-h-[70vh]">
           <div 
-            className="w-full max-w-[300px] relative shadow-2xl transition-colors duration-500 overflow-hidden"
+            ref={containerRef}
+            className="w-full max-w-[300px] relative shadow-2xl transition-colors duration-500 overflow-hidden touch-none"
             style={{ 
               backgroundColor: selectedFrame.bgColor,
               aspectRatio: layout.id === 'single-1' ? '1/1.13' : layout.id === 'grid-4' ? '1/1.2' : '1/2.6',
@@ -307,8 +363,9 @@ const PhotoEditor: React.FC<Props> = ({ photos, layout, initialFrame, onBack, on
               {texts.map(t => (
                 <div 
                   key={t.id} 
-                  className="absolute z-30 transform -translate-x-1/2 -translate-y-1/2 font-display font-bold uppercase whitespace-nowrap cursor-pointer"
-                  style={{ left: `${t.x}%`, top: `${t.y}%`, color: t.color, fontSize: `${t.fontSize}px`, textShadow: selectedFrame.bgColor === '#FFFFFF' ? '0 2px 4px rgba(0,0,0,0.1)' : 'none' }}
+                  className="absolute z-30 transform -translate-x-1/2 -translate-y-1/2 font-bold whitespace-nowrap cursor-move select-none"
+                  style={{ left: `${t.x}%`, top: `${t.y}%`, color: t.color, fontFamily: t.fontFamily, fontSize: `${t.fontSize}px`, textShadow: selectedFrame.bgColor === '#FFFFFF' ? '0 2px 4px rgba(0,0,0,0.1)' : 'none' }}
+                  onPointerDown={(e) => handlePointerDown(e, t.id, 'text')}
                 >
                   {t.text}
                 </div>
@@ -318,19 +375,23 @@ const PhotoEditor: React.FC<Props> = ({ photos, layout, initialFrame, onBack, on
               {placedStickers.map(s => (
                 <div
                   key={s.id}
-                  className="absolute z-20 transform -translate-x-1/2 -translate-y-1/2 cursor-pointer leading-none"
+                  className="absolute z-20 transform -translate-x-1/2 -translate-y-1/2 cursor-move leading-none select-none"
                   style={{ 
                     left: `${s.x}%`, 
                     top: `${s.y}%`, 
                     fontSize: `${32 * s.scale}px`,
                     transform: `translate(-50%, -50%) rotate(${s.rotation}deg)` 
                   }}
+                  onPointerDown={(e) => handlePointerDown(e, s.id, 'sticker')}
                 >
                   {s.emoji}
                 </div>
               ))}
             </div>
 
+            {customImage && (
+              <img src={customImage} className="absolute bottom-4 left-3 w-12 h-12 object-contain z-40 pointer-events-none" alt="Custom overlay" />
+            )}
             <div className="absolute bottom-3 left-0 w-full text-center text-[8px] font-display font-bold tracking-[0.2em]" style={{ color: selectedFrame.textColor }}>
               PHOTOMATICS AI BOOTH
             </div>
@@ -345,7 +406,8 @@ const PhotoEditor: React.FC<Props> = ({ photos, layout, initialFrame, onBack, on
               { id: 'filter', icon: ImageIcon, label: 'Filter Warna' },
               { id: 'sticker', icon: Smile, label: 'Stiker Lucu' },
               { id: 'text', icon: Type, label: 'Tambah Teks' },
-              { id: 'frame', icon: Palette, label: 'Frame Warna' }
+              { id: 'frame', icon: Palette, label: 'Frame Warna' },
+              { id: 'custom', icon: Crown, label: 'Mascot (Pro)' }
             ].map(tab => (
               <button
                 key={tab.id}
@@ -409,18 +471,6 @@ const PhotoEditor: React.FC<Props> = ({ photos, layout, initialFrame, onBack, on
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                           <div>
-                            <label className="text-[10px] text-gray-500 uppercase">X Position</label>
-                            <input type="range" min="5" max="95" value={s.x} onChange={(e) => {
-                              const newS = [...placedStickers]; newS[idx].x = Number(e.target.value); setPlacedStickers(newS);
-                            }} className="w-full accent-brand-via" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] text-gray-500 uppercase">Y Position</label>
-                            <input type="range" min="5" max="95" value={s.y} onChange={(e) => {
-                              const newS = [...placedStickers]; newS[idx].y = Number(e.target.value); setPlacedStickers(newS);
-                            }} className="w-full accent-brand-via" />
-                          </div>
-                          <div>
                             <label className="text-[10px] text-gray-500 uppercase">Scale</label>
                             <input type="range" min="0.5" max="3" step="0.1" value={s.scale} onChange={(e) => {
                               const newS = [...placedStickers]; newS[idx].scale = Number(e.target.value); setPlacedStickers(newS);
@@ -468,32 +518,46 @@ const PhotoEditor: React.FC<Props> = ({ photos, layout, initialFrame, onBack, on
                           </button>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="text-[10px] text-gray-500 uppercase">X Position</label>
-                            <input type="range" min="2" max="98" value={t.x} onChange={(e) => {
-                              const newT = [...texts]; newT[idx].x = Number(e.target.value); setTexts(newT);
-                            }} className="w-full accent-brand-via" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] text-gray-500 uppercase">Y Position</label>
-                            <input type="range" min="2" max="98" value={t.y} onChange={(e) => {
-                              const newT = [...texts]; newT[idx].y = Number(e.target.value); setTexts(newT);
-                            }} className="w-full accent-brand-via" />
-                          </div>
-                          <div>
+                          <div className="col-span-2 sm:col-span-1">
                             <label className="text-[10px] text-gray-500 uppercase">Size</label>
                             <input type="range" min="8" max="48" value={t.fontSize} onChange={(e) => {
                               const newT = [...texts]; newT[idx].fontSize = Number(e.target.value); setTexts(newT);
                             }} className="w-full accent-brand-via" />
                           </div>
-                          <div>
+                          <div className="col-span-2 sm:col-span-1">
+                            <label className="text-[10px] text-gray-500 uppercase">Font</label>
+                            <select 
+                              value={t.fontFamily}
+                              onChange={(e) => {
+                                const newT = [...texts]; newT[idx].fontFamily = e.target.value; setTexts(newT);
+                              }}
+                              className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-brand-via mt-1 appearance-none cursor-pointer"
+                              style={{ fontFamily: t.fontFamily }}
+                            >
+                              <option className="bg-gray-900" value="Outfit" style={{ fontFamily: 'Outfit' }}>Outfit (Modern)</option>
+                              <option className="bg-gray-900" value="sans-serif" style={{ fontFamily: 'sans-serif' }}>Sans Serif</option>
+                              <option className="bg-gray-900" value="serif" style={{ fontFamily: 'serif' }}>Serif</option>
+                              <option className="bg-gray-900" value="monospace" style={{ fontFamily: 'monospace' }}>Monospace</option>
+                              <option className="bg-gray-900" value="cursive" style={{ fontFamily: 'cursive' }}>Cursive</option>
+                              <option className="bg-gray-900" value="Impact" style={{ fontFamily: 'Impact' }}>Impact</option>
+                              <option className="bg-gray-900" value="'Comic Sans MS', cursive" style={{ fontFamily: "'Comic Sans MS', cursive" }}>Comic Sans</option>
+                            </select>
+                          </div>
+                          <div className="col-span-2">
                             <label className="text-[10px] text-gray-500 uppercase">Color</label>
-                            <div className="flex gap-2 mt-1">
-                              {['#FFFFFF', '#0F172A', '#8B5CF6', '#00E5FF', '#DB2777'].map(c => (
+                            <div className="flex flex-wrap gap-2 mt-1">
+                              {['#FFFFFF', '#0F172A', '#8B5CF6', '#00E5FF', '#DB2777', '#F87171', '#FBBF24', '#34D399'].map(c => (
                                 <button key={c} onClick={() => {
                                   const newT = [...texts]; newT[idx].color = c; setTexts(newT);
-                                }} className={`w-6 h-6 rounded-full border-2 ${t.color === c ? 'border-brand-via scale-110' : 'border-transparent'}`} style={{ backgroundColor: c }} />
+                                }} className={`w-6 h-6 rounded-full border-2 transition-all ${t.color === c ? 'border-brand-via scale-110 shadow-lg' : 'border-transparent hover:scale-105'}`} style={{ backgroundColor: c }} />
                               ))}
+                              {/* Native color picker */}
+                              <label className={`w-6 h-6 rounded-full overflow-hidden border-2 cursor-pointer relative transition-all ${!['#FFFFFF', '#0F172A', '#8B5CF6', '#00E5FF', '#DB2777', '#F87171', '#FBBF24', '#34D399'].includes(t.color) ? 'border-brand-via scale-110 shadow-lg' : 'border-transparent hover:scale-105'}`}>
+                                <div className="absolute inset-0 bg-gradient-to-br from-red-500 via-green-500 to-blue-500 rounded-full" />
+                                <input type="color" value={t.color} onChange={(e) => {
+                                  const newT = [...texts]; newT[idx].color = e.target.value; setTexts(newT);
+                                }} className="opacity-0 absolute inset-0 w-full h-full cursor-pointer" />
+                              </label>
                             </div>
                           </div>
                         </div>
@@ -519,6 +583,46 @@ const PhotoEditor: React.FC<Props> = ({ photos, layout, initialFrame, onBack, on
                     </div>
                   </button>
                 ))}
+              </div>
+            )}
+
+            {/* Custom Mascot Tab */}
+            {activeTab === 'custom' && (
+              <div>
+                <h4 className="text-sm font-bold text-gray-400 mb-4 uppercase">Mascot / Custom Logo</h4>
+                {sessionMode !== 'premium' ? (
+                  <div className="flex flex-col items-center justify-center p-8 bg-white/5 rounded-xl border border-white/10 text-center">
+                    <Crown className="w-12 h-12 text-gray-500 mb-3" />
+                    <p className="text-sm font-bold text-gray-300">Fitur Premium</p>
+                    <p className="text-xs text-gray-500 mt-2 max-w-xs">Upgrade ke Premium Sesi untuk menambahkan logo custom, karakter anime, atau gambar Anda sendiri di pojok photostrip.</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center p-6 bg-white/5 rounded-xl border border-brand-via/30 border-dashed">
+                    {!customImage ? (
+                      <>
+                        <label className="cursor-pointer bg-brand-via px-6 py-2.5 rounded-full font-bold hover:bg-brand-end transition text-sm flex items-center gap-2">
+                          <ImageIcon className="w-4 h-4" /> Pilih Gambar
+                          <input type="file" accept="image/png, image/jpeg" className="hidden" onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                               const reader = new FileReader();
+                               reader.onload = (e) => setCustomImage(e.target?.result as string);
+                               reader.readAsDataURL(file);
+                            }
+                          }} />
+                        </label>
+                        <p className="text-xs text-gray-400 mt-4 text-center max-w-[200px]">Gunakan file PNG transparan untuk hasil terbaik.</p>
+                      </>
+                    ) : (
+                      <div className="w-full flex flex-col items-center">
+                        <img src={customImage} className="w-24 h-24 object-contain bg-black/50 rounded-lg p-2 mb-4" alt="Custom Logo" />
+                        <button onClick={() => setCustomImage(null)} className="text-red-400 hover:text-red-300 text-sm font-bold flex items-center gap-1 bg-red-400/10 px-4 py-2 rounded-lg transition-colors">
+                          <Trash2 className="w-4 h-4" /> Hapus Gambar
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
